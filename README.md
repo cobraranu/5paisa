@@ -24,6 +24,51 @@ Read the docs hosted [here](https://5paisa.github.io/)
 
 `pip install py5paisa`
 
+### Example Usage
+
+This repository includes an example script `example.py` that demonstrates how to log in and fetch your holdings.
+
+**1. Configure API Credentials:**
+
+The script can read your API credentials from a `keys.conf` file. This file keeps your sensitive information separate from the code.
+
+*   Copy the example configuration file:
+    ```bash
+    cp keys.conf.example keys.conf
+    ```
+*   Open `keys.conf` in a text editor and replace the placeholder values with your **actual 5paisa API credentials**. You can obtain these from the [5paisa Developer API Keys page](https://invest.5paisa.com/DeveloperAPI/APIKeys).
+
+    ```ini
+    [KEYS]
+    APP_NAME=YOUR_APP_NAME_HERE
+    APP_SOURCE=YOUR_APP_SOURCE_HERE
+    USER_ID=YOUR_USER_ID_HERE
+    PASSWORD=YOUR_PASSWORD_HERE
+    USER_KEY=YOUR_USER_KEY_HERE
+    ENCRYPTION_KEY=YOUR_ENCRYPTION_KEY_HERE
+    ```
+
+    **Important:** The `example.py` script interacts with the live 5paisa API. It **will not work with placeholder data**. You must use your valid credentials.
+
+    **Security Note:** Keep your `keys.conf` file secure and do not commit it to version control if you are using Git. Add `keys.conf` to your `.gitignore` file.
+
+    **Note:** The `example.py` script also contains a section with hardcoded credentials. If you choose to use that method, ensure you replace the placeholders directly in the script. However, using `keys.conf` is recommended for better security and easier configuration. The script is set up to prioritize `keys.conf` if you uncomment the relevant lines in `example.py` that handle reading from `keys.conf`.
+
+**2. Run the Example Script:**
+
+To test `example.py`, ensure you have:
+    1. Created `keys.conf` from `keys.conf.example`.
+    2. Filled `keys.conf` with your **actual and valid** 5paisa API credentials.
+    3. (Optional, if you prefer `keys.conf`) Uncommented the lines in `example.py` to read credentials from `keys.conf`.
+
+Once the above is done, you can run the script:
+
+```bash
+python example.py
+```
+
+Successful execution will log you in and print your current holdings information. If you encounter issues, they might stem from incorrect credentials, problems with your Date of Birth (DOB) format in `example.py`, or API connectivity problems. Double-check your `keys.conf` and the DOB variable in `example.py`.
+
 ### Usage
 
 #### Configuring API keys
