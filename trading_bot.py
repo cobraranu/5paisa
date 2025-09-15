@@ -408,7 +408,7 @@ def main():
     detect_candle_patterns(kite)
 
     # 5. Setup Rich Live Display & Main Loop
-    with Live(generate_live_table(), screen=True, redirect_stderr=False, refresh_per_second=1) as live:
+    with Live(generate_live_table(), redirect_stderr=False, refresh_per_second=1) as live:
         console.print("[bold yellow]Bot is running. Press Ctrl+C to stop.[/bold yellow]")
         while True:
             try:
