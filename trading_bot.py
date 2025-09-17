@@ -46,10 +46,10 @@ Features:
 # --- Imports ---
 import os
 import logging
-import pandas as pd
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.table import Table
+from rich.panel import Panel
 from kiteconnect import KiteConnect, KiteTicker
 import schedule
 import time
@@ -174,77 +174,6 @@ def get_nifty50_instrument_tokens(kite):
         return [], {}
 
 
-def display_holdings(kite):
-    try:
-        holdings = kite.holdings()
-        if not holdings:
-            console.print("[yellow]No holdings found.[/yellow]")
-            return
-
-        table = Table(title="[bold green]Holdings[/bold green]", show_header=True, header_style="bold magenta")
-        table.add_column("Symbol", style="cyan")
-        table.add_column("Qty", justify="right")
-        table.add_column("Avg. Price", justify="right", style="yellow")
-        table.add_column("LTP", justify="right", style="green")
-        table.add_column("P&L", justify="right")
-
-        total_pnl = 0
-        for h in holdings:
-            pnl = (h['last_price'] - h['average_price']) * h['quantity']
-            total_pnl += pnl
-            pnl_style = "green" if pnl >= 0 else "red"
-            table.add_row(
-                h['tradingsymbol'],
-                str(h['quantity']),
-                f"{h['average_price']:.2f}",
-                f"{h['last_price']:.2f}",
-                f"[{pnl_style}]{pnl:,.2f}[/{pnl_style}]"
-            )
-
-        console.print(table)
-        total_pnl_style = "bold green" if total_pnl >= 0 else "bold red"
-        console.print(f"Total Holdings P&L: [{total_pnl_style}]{total_pnl:,.2f}[/{total_pnl_style}]")
-    except Exception as e:
-        log.error(f"Error fetching holdings: {e}")
-        console.print(f"[bold red]Error fetching holdings: {e}[/bold red]")
-
-
-def display_positions(kite):
-    try:
-        positions = kite.positions().get('net', [])
-        if not any(p['quantity'] != 0 for p in positions):
-            console.print("[yellow]No open positions found.[/yellow]")
-            return
-
-        table = Table(title="[bold blue]Open Positions[/bold blue]", show_header=True, header_style="bold magenta")
-        table.add_column("Product", style="cyan")
-        table.add_column("Symbol", style="cyan")
-        table.add_column("Qty", justify="right")
-        table.add_column("Avg. Price", justify="right", style="yellow")
-        table.add_column("LTP", justify="right", style="green")
-        table.add_column("P&L", justify="right")
-
-        total_pnl = 0
-        for p in positions:
-            if p['quantity'] != 0:  # Display only open positions
-                pnl = p['pnl']
-                total_pnl += pnl
-                pnl_style = "green" if pnl >= 0 else "red"
-                table.add_row(
-                    p['product'],
-                    p['tradingsymbol'],
-                    str(p['quantity']),
-                    f"{p['average_price']:.2f}",
-                    f"{p['last_price']:.2f}",
-                    f"[{pnl_style}]{pnl:,.2f}[/{pnl_style}]"
-                )
-
-        console.print(table)
-        total_pnl_style = "bold green" if total_pnl >= 0 else "bold red"
-        console.print(f"Total Positional P&L: [{total_pnl_style}]{total_pnl:,.2f}[/{total_pnl_style}]")
-    except Exception as e:
-        log.error(f"Error fetching positions: {e}")
-        console.print(f"[bold red]Error fetching positions: {e}[/bold red]")
 
 
 def get_previous_day_close(kite, instrument_tokens):
@@ -261,7 +190,42 @@ def get_previous_day_close(kite, instrument_tokens):
 
 # --- Global Data Store ---
 live_data = {}
+holdings_data = []
+positions_data = []
 kws = None # Will be initialized in main
+
+
+def update_account_data(kite):
+    """Scheduled job to fetch latest holdings and positions."""
+    global holdings_data, positions_data
+    log.info("Running job: update_account_data")
+    try:
+        latest_holdings = kite.holdings()
+        latest_positions = kite.positions().get('net', [])
+
+        # Check for profit alerts in positions
+        for pos in latest_positions:
+            instrument_token = pos.get('instrument_token')
+            if instrument_token is None: continue
+
+            old_pos_state = next((p for p in positions_data if p.get('instrument_token') == instrument_token), None)
+            pnl = pos['pnl']
+            alert_triggered = old_pos_state.get('pnl_alert_triggered', False) if old_pos_state else False
+
+            if pnl > 5000 and not alert_triggered:
+                console.print('\a', end='')  # Beep
+                console.print(f"[bold yellow]🔔 PROFIT ALERT: {pos['tradingsymbol']} P&L is {pnl:,.2f}![/bold yellow]")
+                pos['pnl_alert_triggered'] = True
+            elif pnl <= 5000 and alert_triggered:
+                pos['pnl_alert_triggered'] = False
+            else:
+                pos['pnl_alert_triggered'] = alert_triggered
+
+        holdings_data = latest_holdings
+        positions_data = latest_positions
+    except Exception as e:
+        log.error(f"Error in update_account_data job: {e}")
+
 
 def on_ticks(ws, ticks):
     for tick in ticks:
@@ -326,58 +290,111 @@ def detect_candle_patterns(kite):
     except Exception as e:
         log.error(f"Error in detect_candle_patterns job: {e}")
 
-def generate_live_table() -> Table:
-    """Generates the rich Table for live display."""
-    table = Table(title=f"[bold blue]Nifty 50 Live Tracker[/bold blue] (Last updated: {datetime.now().strftime('%H:%M:%S')})", show_header=True, header_style="bold magenta")
-    table.add_column("Symbol", style="cyan", no_wrap=True)
-    table.add_column("LTP", justify="right", style="green")
-    table.add_column("% Change", justify="right")
-    table.add_column("Volume", justify="right", style="yellow")
-    table.add_column("Pattern (1H)", justify="left")
+def generate_dashboard() -> Group:
+    """Generates the rich Group for live display."""
+    # Holdings Table
+    holdings_table = Table(title="[bold green]Holdings[/bold green]", show_header=True, header_style="bold magenta", border_style="green")
+    holdings_table.add_column("Symbol", style="cyan")
+    holdings_table.add_column("Qty", justify="right")
+    holdings_table.add_column("Avg. Price", justify="right", style="yellow")
+    holdings_table.add_column("LTP", justify="right", style="green")
+    holdings_table.add_column("P&L", justify="right")
 
-    most_active_token = max(live_data, key=lambda t: live_data[t]['volume']) if live_data else None
-    sorted_tokens = sorted(live_data.keys(), key=lambda t: live_data[t]['symbol'])
+    total_holdings_pnl = 0
+    if holdings_data:
+        for h in holdings_data:
+            pnl = (h['last_price'] - h['average_price']) * h['quantity']
+            total_holdings_pnl += pnl
+            pnl_style = "green" if pnl >= 0 else "red"
+            holdings_table.add_row(
+                h['tradingsymbol'], str(h['quantity']),
+                f"{h['average_price']:.2f}", f"{h['last_price']:.2f}",
+                f"[{pnl_style}]{pnl:,.2f}[/{pnl_style}]"
+            )
 
-    for token in sorted_tokens:
-        data = live_data[token]
-        row_style = ""
-        if data['highlight'] == 'high_positive':
-            row_style = "on #004d00" # Dark green background
-        elif data['highlight'] == 'high_negative':
-            row_style = "on #660000" # Dark red background
+    # Positions Table
+    positions_table = Table(title="[bold blue]Open Positions[/bold blue]", show_header=True, header_style="bold magenta", border_style="blue")
+    positions_table.add_column("Product", style="cyan")
+    positions_table.add_column("Symbol", style="cyan")
+    positions_table.add_column("Qty", justify="right")
+    positions_table.add_column("Avg. Price", justify="right", style="yellow")
+    positions_table.add_column("LTP", justify="right", style="green")
+    positions_table.add_column("P&L", justify="right")
 
-        symbol = f"⭐ {data['symbol']}" if token == most_active_token else data['symbol']
-        change_percent = data['change_percent']
-        pnl_style = "green" if change_percent >= 0 else "red"
+    total_positions_pnl = 0
+    if positions_data:
+        for p in positions_data:
+            if p['quantity'] != 0:
+                pnl = p['pnl']
+                total_positions_pnl += pnl
+                pnl_style = "green" if pnl >= 0 else "red"
 
-        pattern_text = ""
-        if data['pattern'] == "Bullish O=L":
-            pattern_text = f"[bold green]🟢 Bullish O=L[/bold green]"
-        elif data['pattern'] == "Bearish O=H":
-            pattern_text = f"[bold red]🔴 Bearish O=H[/bold red]"
+                row_style = ""
+                if pnl > 5000:
+                    row_style = "on #f5f542"
 
-        table.add_row(
-            symbol,
-            f"{data['ltp']:.2f}",
-            f"[{pnl_style}]{change_percent:+.2f}%[/{pnl_style}]",
-            f"{data['volume']:,}",
-            pattern_text,
-            style=row_style
-        )
-    return table
+                positions_table.add_row(
+                    p['product'], p['tradingsymbol'], str(p['quantity']),
+                    f"{p['average_price']:.2f}", f"{p['last_price']:.2f}",
+                    f"[{pnl_style}]{pnl:,.2f}[/{pnl_style}]",
+                    style=row_style
+                )
+
+    # Nifty 50 Table
+    nifty_table = Table(title=f"[bold purple]Nifty 50 Live Tracker[/bold purple] (Last updated: {datetime.now().strftime('%H:%M:%S')})", show_header=True, header_style="bold magenta", border_style="purple")
+    nifty_table.add_column("Symbol", style="cyan", no_wrap=True)
+    nifty_table.add_column("LTP", justify="right", style="green")
+    nifty_table.add_column("% Change", justify="right")
+    nifty_table.add_column("Volume", justify="right", style="yellow")
+    nifty_table.add_column("Pattern (1H)", justify="left")
+
+    if live_data:
+        most_active_token = max(live_data, key=lambda t: live_data[t]['volume'])
+        sorted_tokens = sorted(live_data.keys(), key=lambda t: live_data[t]['symbol'])
+
+        for token in sorted_tokens:
+            data = live_data[token]
+            row_style = ""
+            if data['highlight'] == 'high_positive': row_style = "on #004d00"
+            elif data['highlight'] == 'high_negative': row_style = "on #660000"
+
+            symbol = f"⭐ {data['symbol']}" if token == most_active_token else data['symbol']
+            change_percent = data['change_percent']
+            pnl_style = "green" if change_percent >= 0 else "red"
+
+            pattern_text = ""
+            if data['pattern'] == "Bullish O=L": pattern_text = f"[bold green]🟢 Bullish O=L[/bold green]"
+            elif data['pattern'] == "Bearish O=H": pattern_text = f"[bold red]🔴 Bearish O=H[/bold red]"
+
+            nifty_table.add_row(
+                symbol, f"{data['ltp']:.2f}", f"[{pnl_style}]{change_percent:+.2f}%[/{pnl_style}]",
+                f"{data['volume']:,}", pattern_text, style=row_style
+            )
+
+    # Totals Panel
+    holdings_pnl_style = "bold green" if total_holdings_pnl >= 0 else "bold red"
+    positions_pnl_style = "bold green" if total_positions_pnl >= 0 else "bold red"
+    totals_summary = (
+        f"Total Holdings P&L: [{holdings_pnl_style}]{total_holdings_pnl:,.2f}[/{holdings_pnl_style}]   |   "
+        f"Total Positional P&L: [{positions_pnl_style}]{total_positions_pnl:,.2f}[/{positions_pnl_style}]"
+    )
+
+    return Group(
+        Panel(totals_summary, title="[bold yellow]Account Summary[/bold yellow]", border_style="yellow"),
+        holdings_table,
+        positions_table,
+        nifty_table
+    )
 
 def main():
     """Main function to run the bot."""
     console.print("[bold cyan]Starting Zerodha Trading Bot...[/bold cyan]")
-    global live_data, kws
+    global live_data, kws, holdings_data, positions_data
 
     # 1. Authentication
     kite = authenticate()
     if not kite:
         return
-
-    display_holdings(kite)
-    display_positions(kite)
 
     # 2. Fetch Nifty 50 Stocks
     nifty50_tokens, token_map = get_nifty50_instrument_tokens(kite)
@@ -401,19 +418,21 @@ def main():
     kws.connect(threaded=True)
 
     # Schedule jobs
+    schedule.every(5).seconds.do(update_account_data, kite=kite)
     schedule.every(5).minutes.do(check_high_percentage_change)
     schedule.every(1).hour.do(detect_candle_patterns, kite=kite)
 
-    # Run initial analysis
+    # Run initial data fetch for all components
+    update_account_data(kite)
     detect_candle_patterns(kite)
 
     # 5. Setup Rich Live Display & Main Loop
-    with Live(generate_live_table(), redirect_stderr=False, refresh_per_second=1) as live:
+    with Live(generate_dashboard(), redirect_stderr=False, refresh_per_second=1) as live:
         console.print("[bold yellow]Bot is running. Press Ctrl+C to stop.[/bold yellow]")
         while True:
             try:
                 schedule.run_pending()
-                live.update(generate_live_table())
+                live.update(generate_dashboard())
                 time.sleep(1)
             except KeyboardInterrupt:
                 console.print("\n[bold red]Bot stopped by user.[/bold red]")
