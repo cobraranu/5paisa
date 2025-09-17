@@ -1,0 +1,4 @@
+pykiteconnect
+pandas
+rich
+schedule
